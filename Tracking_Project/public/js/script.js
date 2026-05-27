@@ -1,62 +1,90 @@
-const socket = io(); // Backend se connect ho raha hai
+const socket = io();
 
-// **Geolocation Request**
-navigator.geolocation.getCurrentPosition(
-    (position) => {
-        const { latitude, longitude } = position.coords;
-        console.log("User Location:", latitude, longitude); // Debugging
-        map.setView([latitude, longitude], 12);
-        L.marker([latitude, longitude]).addTo(map).bindPopup("You are here!").openPopup(); // Ensure marker is added
-        socket.emit("send-location", { latitude, longitude });
-    },
-    (error) => {
-        console.error("Geolocation Error:", error);
-    },
-    {
-        enableHighAccuracy: true,
-        timeout: 5000,
-        maximumAge: 0
-    }
-);
+// ✅ 1. Map initialize
+const map = L.map("map").setView([20, 78], 5);
 
-// **Leaflet Map Initialization**
-const map = L.map("map").setView([20, 78], 5); // Default India Center
-
+// ✅ 2. Tile layer
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    attribution: '&copy; OpenStreetMap contributors'
+  attribution: "&copy; OpenStreetMap contributors"
 }).addTo(map);
 
-// Ensure Map Resizes Properly
-setTimeout(() => {
-    map.invalidateSize();
-}, 500);
+// ✅ 3. Fix Leaflet default marker icon
+delete L.Icon.Default.prototype._getIconUrl;
 
-const markers = {};
-
-// **Receiving Location from Backend**
-socket.on("receive-location", (data) => {
-    console.log("Received Location from Backend:", data);
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png",
+  iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png",
+  shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png"
 });
 
-    const { id, latitude, longitude } = data;
-    if (!latitude || !longitude) return; 
+// Store markers for multiple users
+const markers = {};
+
+// ✅ 4. Live location tracking (BEST)
+navigator.geolocation.watchPosition(
+  (position) => {
+    const { latitude, longitude } = position.coords;
+
+    console.log("User Location:", latitude, longitude);
 
     map.setView([latitude, longitude], 12);
 
-    if (markers[id]) {
-        markers[id].setLatLng([latitude, longitude]);
+    // Apna marker
+    if (!markers["me"]) {
+      markers["me"] = L.marker([latitude, longitude])
+        .addTo(map)
+        .bindPopup("You are here!")
+        .openPopup();
     } else {
-        markers[id] = L.marker([latitude, longitude]).addTo(map)
-            .bindPopup(`User: ${id}`).openPopup();
+      markers["me"].setLatLng([latitude, longitude]);
     }
 
-// **User Disconnect Event**
-socket.on("user-disconnected", (id) => {
-    if (markers[id]) {
-        map.removeLayer(markers[id]);
-        delete markers[id];
-    }
+    // Send to backend
+    socket.emit("send-location", { latitude, longitude });
+  },
+
+  (error) => {
+    console.error("Geolocation Error Code:", error.code);
+    console.error("Geolocation Error Message:", error.message);
+
+    // ✅ Fallback (important)
+    const latitude = 20;
+    const longitude = 78;
+
+    map.setView([latitude, longitude], 5);
+
+    L.marker([latitude, longitude])
+      .addTo(map)
+      .bindPopup("Default Location (Permission Denied)")
+      .openPopup();
+  },
+
+  {
+    enableHighAccuracy: true,
+    timeout: 5000,
+    maximumAge: 0
+  }
+);
+
+// ✅ 5. Receive other users' locations
+socket.on("receive-location", (data) => {
+  const { id, latitude, longitude } = data;
+
+  if (!latitude || !longitude) return;
+
+  if (markers[id]) {
+    markers[id].setLatLng([latitude, longitude]);
+  } else {
+    markers[id] = L.marker([latitude, longitude])
+      .addTo(map)
+      .bindPopup(`User: ${id}`);
+  }
 });
-setTimeout(() => {
-    map.invalidateSize();
-}, 1000);
+
+// ✅ 6. Remove disconnected users
+socket.on("user-disconnected", (id) => {
+  if (markers[id]) {
+    map.removeLayer(markers[id]);
+    delete markers[id];
+  }
+});
